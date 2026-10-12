@@ -1,0 +1,222 @@
+# Aegis-ML CI.
+#
+#   lint-test ─┐
+#   sast      ─┤
+#   sca       ─┼─> container (build -> Trivy gate -> SARIF)
+#   secrets   ─┤
+#   robustness-gate (secure CT pipeline must quarantine a backdoor and pass gates)
+#
+# Every third-party action is pinned to a full commit SHA. Mutable tags are how
+# the March 2026 trivy-action compromise (CVE-2026-33634) reached CI secrets.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default; jobs escalate only where they must.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MLFLOW_DISABLE_AGENT_HINT: "1"
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+
+jobs:
+  lint-test:
+    name: lint + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - name: Sync (locked)
+        run: uv sync --frozen
+      - name: Ruff lint
+        run: uv run ruff check . --output-format github
+      - name: Ruff format check
+        run: uv run ruff format --check .
+      - name: Tests with coverage
+        run: uv run pytest -q --cov=aegis --cov-report=xml --cov-report=term-missing
+      - name: Upload coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  sast:
+    name: SAST (Bandit + Semgrep)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # upload SARIF to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - name: Bandit (fails on medium+ findings)
+        run: uvx --from 'bandit[sarif]==1.9.4' bandit -r src -ll -f sarif -o bandit.sarif
+      - name: Semgrep rule tests
+        run: uvx semgrep@1.180.0 --test --config .semgrep/ml-supply-chain.yml .semgrep/ml-supply-chain.py
+      - name: Semgrep scan (p/python + custom ML supply-chain rules)
+        run: >
+          uvx semgrep@1.180.0 scan --metrics=off --error
+          --config p/python --config .semgrep
+          --sarif --output semgrep.sarif
+      - name: Upload Bandit SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+      - name: Upload Semgrep SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  sca:
+    name: SCA (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - name: Audit locked runtime dependencies (hash-pinned, no resolver)
+        run: |
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+          uvx pip-audit==2.10.1 -r requirements.txt --disable-pip --require-hashes
+
+  secrets:
+    name: secret scan (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (checksum-verified)
+        run: |
+          curl -sSfL -o gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum --check
+          tar -xzf gitleaks.tgz gitleaks
+      - name: Scan full git history
+        run: ./gitleaks git --redact --verbose --exit-code 1 .
+
+  robustness-gate:
+    name: secure CT pipeline gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - name: Sync (locked)
+        run: uv sync --frozen --no-dev
+      - name: Backdoored batch + poison scan must pass all gates
+        run: uv run aegis pipeline run --scenario backdoor
+      - name: Same batch without the scan must be rejected
+        run: |
+          if uv run aegis pipeline run --scenario backdoor --no-scan; then
+            echo "::error::pipeline accepted a backdoored model"; exit 1
+          fi
+          echo "rejected as expected"
+      - name: Upload reports and model card
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: robustness-reports
+          path: |
+            reports/
+            quarantine/
+            artifacts/*.md
+            artifacts/*.json
+          if-no-files-found: warn
+
+  container:
+    name: image build + Trivy
+    needs: [lint-test, sast, sca, secrets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write # upload Trivy SARIF to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: false
+          load: true
+          tags: aegis-ml:ci
+          provenance: false
+      - name: Trivy gate (fail on fixable CRITICAL/HIGH)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: aegis-ml:ci
+          format: table
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Trivy report (SARIF, all severities)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: aegis-ml:ci
+          format: sarif
+          output: trivy.sarif
+          skip-setup-trivy: true
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+      - name: Smoke test the container (non-root, read-only rootfs)
+        run: |
+          docker run -d --name api -p 8000:8000 --read-only --tmpfs /tmp \
+            --cap-drop ALL --security-opt no-new-privileges \
+            -e AEGIS_API_KEYS=ci-smoke-key aegis-ml:ci
+          for _ in $(seq 1 60); do curl -sf localhost:8000/health && break; sleep 1; done
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/predict \
+            -H 'content-type: application/json' -d '{"pixels":[0.0]}')
+          test "$code" = "401"
+          docker exec api id -u | grep -qx 10001
+      - name: Container logs
+        if: always()
+        run: docker logs api 2>&1 | tail -50 || true

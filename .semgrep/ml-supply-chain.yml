@@ -1,0 +1,79 @@
+# Project-specific Semgrep rules for ML supply-chain risks that generic
+# rulesets miss. Run with: semgrep scan --config .semgrep
+# Rule tests: semgrep --test .semgrep
+rules:
+  - id: unsafe-model-deserialization
+    languages: [python]
+    severity: ERROR
+    message: >-
+      This deserializer executes arbitrary code embedded in the file (CWE-502).
+      A tampered model becomes remote code execution on the inference server.
+      Use skops with a reviewed type allowlist (this repo uses safetensors, see src/aegis/artifacts.py).
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      owasp: "A08:2021 Software and Data Integrity Failures"
+    pattern-either:
+      - pattern: pickle.load(...)
+      - pattern: pickle.loads(...)
+      - pattern: cloudpickle.load(...)
+      - pattern: cloudpickle.loads(...)
+      - pattern: dill.load(...)
+      - pattern: dill.loads(...)
+      - pattern: joblib.load(...)
+      - pattern: pandas.read_pickle(...)
+      - pattern: numpy.load(..., allow_pickle=True, ...)
+
+  - id: torch-load-without-weights-only
+    languages: [python]
+    severity: ERROR
+    message: torch.load unpickles arbitrary objects unless weights_only=True (CWE-502).
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+    patterns:
+      - pattern: torch.load(...)
+      - pattern-not: torch.load(..., weights_only=True, ...)
+
+  - id: skops-blanket-trust
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Passing every reported untrusted type straight to `trusted=` disables the
+      check. Compare get_untrusted_types() against a reviewed allowlist first.
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+    pattern-either:
+      - pattern: $SIO.load(..., trusted=True, ...)
+      - pattern: $SIO.load($F, trusted=$SIO.get_untrusted_types(...))
+
+  - id: mlflow-pyfunc-cloudpickle-load
+    languages: [python]
+    severity: WARNING
+    message: >-
+      mlflow.pyfunc.load_model / mlflow.sklearn.load_model unpickle the model.
+      Only load from a registry you control, and verify the artifact digest first.
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+    pattern-either:
+      - pattern: mlflow.pyfunc.load_model(...)
+      - pattern: mlflow.sklearn.load_model(...)
+
+  - id: yaml-unsafe-load
+    languages: [python]
+    severity: ERROR
+    message: yaml.load without SafeLoader can construct arbitrary Python objects. Use yaml.safe_load.
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+    patterns:
+      - pattern: yaml.load(...)
+      - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+      - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+
+  - id: tls-verification-disabled
+    languages: [python]
+    severity: ERROR
+    message: TLS verification disabled; data or model downloads can be swapped in transit.
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+    pattern-either:
+      - pattern: requests.$M(..., verify=False, ...)
+      - pattern: httpx.$M(..., verify=False, ...)

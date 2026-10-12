@@ -1,0 +1,9 @@
+# Gitleaks config: default rules plus a narrow allowlist for deliberately
+# public test fixtures. Allowlist exact values, never whole files.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "API key used only by the test suite"
+regexTarget = "secret"
+regexes = ['''^test-key-abc123$''']

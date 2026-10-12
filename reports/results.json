@@ -1,0 +1,110 @@
+{
+  "generated_utc": "2026-10-12T20:47:25.518772+00:00",
+  "seed": 1337,
+  "dataset": {
+    "name": "sklearn load_digits",
+    "train": 1167,
+    "val": 270,
+    "test": 360,
+    "classes": 10
+  },
+  "baseline_clean_accuracy": 0.9833,
+  "adversarial_clean_accuracy": 0.9639,
+  "evasion": {
+    "eps_grid": [
+      0.05,
+      0.1,
+      0.2,
+      0.3
+    ],
+    "fgsm": {
+      "standard": [
+        0.8806,
+        0.6111,
+        0.0389,
+        0.0
+      ],
+      "adversarial": [
+        0.9528,
+        0.875,
+        0.6139,
+        0.2278
+      ]
+    },
+    "pgd": {
+      "standard": [
+        0.875,
+        0.5611,
+        0.0139,
+        0.0
+      ],
+      "adversarial": [
+        0.9528,
+        0.8583,
+        0.5083,
+        0.0472
+      ]
+    }
+  },
+  "feature_squeezing": {
+    "eps": 0.2,
+    "threshold": 1.0459,
+    "clean_fpr": 0.0667,
+    "fgsm_detection_rate": 0.5194,
+    "pgd_detection_rate": 0.4722
+  },
+  "label_flip": {
+    "rate": 0.3,
+    "clean_accuracy": 0.9722,
+    "poisoned_accuracy": 0.95,
+    "detector_precision": 0.8972,
+    "detector_recall": 0.9971,
+    "accuracy_after_removal": 0.9583,
+    "n_poison": 350,
+    "n_flagged": 389
+  },
+  "backdoor": {
+    "poison_rate": 0.06,
+    "target_class": 0,
+    "clean_accuracy": 0.9639,
+    "asr": 0.9846,
+    "detector_precision": 0.69,
+    "detector_recall": 0.9857,
+    "asr_after_filtering": 0.0154,
+    "accuracy_after_filtering": 0.9806,
+    "n_poison": 70,
+    "n_flagged": 100
+  },
+  "extraction": {
+    "budgets": [
+      {
+        "budget": 250,
+        "surrogate_accuracy": 0.8306,
+        "fidelity": 0.8361
+      },
+      {
+        "budget": 500,
+        "surrogate_accuracy": 0.9,
+        "fidelity": 0.9111
+      },
+      {
+        "budget": 1000,
+        "surrogate_accuracy": 0.9278,
+        "fidelity": 0.9306
+      },
+      {
+        "budget": 2000,
+        "surrogate_accuracy": 0.9583,
+        "fidelity": 0.975
+      }
+    ],
+    "prada_queries_to_detect_attacker": 176,
+    "prada_benign_flagged": false,
+    "victim_test_accuracy": 0.9833
+  },
+  "gates": {
+    "min_clean_accuracy": 0.92,
+    "min_pgd_robust_accuracy": 0.3,
+    "max_backdoor_asr": 0.15
+  }
+}
