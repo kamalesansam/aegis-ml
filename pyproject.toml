@@ -39,7 +39,7 @@ dev = [
     "pytest-cov>=5.0",
     "httpx>=0.27",
     "ruff>=0.5",
-    "bandit[sarif]>=1.7",
+    "bandit[sarif]>=1.9.4",
     "pip-audit>=2.7",
 ]
 
